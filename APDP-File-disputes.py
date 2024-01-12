@@ -40,19 +40,13 @@ import concurrent.futures
 
 def main():
     # Ask User for excel sheet to use
-    try:
-        while True:
-            path = easygui.fileopenbox("What Excel sheet would you like to use?")
-            if path == None:
-                return
-            if path.lower().endswith('.xlsx'):
-                break
-            else:
-                easygui.msgbox("Please pick an Excel file (.xlsx)")
-    except Exception as error:
-        logging.error("Error found when selecting file.", error)
+   
+    while True:
+        is_error, path = open_file()
+        if not is_error:
+            break
 
-    # Open Chrome in undetectable mode and get walmart login page
+    # Open Chrome in undetectable mode and get login page
     driver = Driver(uc=True)
     driver.get("https://retaillink.login.wal-mart.com/login")
 
@@ -60,6 +54,7 @@ def main():
     with concurrent.futures.ThreadPoolExecutor() as executor:
         future = executor.submit(load_sheet, path)
         sheet_name, df = future.result()
+        print(path)
 
         future2 = executor.submit(catch_up, df)
         index_value = future2.result()
@@ -79,21 +74,25 @@ def main():
         end_time = time.time()
         elapsed_time = end_time - start_time
         print(elapsed_time / 60, " minutes and ", elapsed_time % 60, " seconds.")
-        #TODO: Raise popup and ask user to close excel sheet if its open
         while True:
             if write_to_file(path, sheet_name, df):
                 break
     return 
-    
-def write_to_file(path: str, sheet_name: str, df: pd.DataFrame):
-    try:
-        with pd.ExcelWriter(path, engine='openpyxl', mode='w') as writer:
-            print("PLEASE WAIT! WRITING TO FILE!")
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
-            return True
-    except PermissionError:
-        easygui.msgbox("You must close workbook before progress can be saved.", "Permission Error", "Continue")
-        return False
+
+def load_sheet(path: str) -> (str, pd.DataFrame):
+    while True:
+        try:
+            xl = pd.ExcelFile(path, engine="openpyxl")
+            break
+        except PermissionError:
+            easygui.msgbox("Selected workbook is in use by another program. Please close workbook before trying again.", "Permission Error", "Try Again")
+        
+    ws = xl.sheet_names
+    sheet_name = list(filter(lambda x: match('^Check_\d{3,10}', x), ws))
+    # sheet_name = list(filter(lambda x: match('^Sheet1', x), ws))
+    df = xl.parse(sheet_name[0])
+    df1 = verify_sheet(df)
+    return sheet_name[0], df1
 
 def loop_over_sheet(driver: WebDriver, df: pd.DataFrame, start_index: int):
     # log of operations
@@ -469,6 +468,31 @@ def close_popup(driver: WebDriver):
 
 # UTILS
 
+def open_file() -> (bool, str):
+    # Returns is_error and path
+    try:
+        path = easygui.fileopenbox("What Excel sheet would you like to use?")
+        if path == None:
+            return True, ""
+        if path.lower().endswith('.xlsx'):
+            return False, path
+        else:
+            easygui.msgbox("Selected file is not an Excel Workbook", "Please pick an Excel file (.xlsx)", "Try Again")
+            return True, ""
+    except Exception as error:
+        logging.error("Error in open_file", error)
+        return True, ""
+
+def write_to_file(path: str, sheet_name: str, df: pd.DataFrame) -> bool:
+    try:
+        with pd.ExcelWriter(path, engine='openpyxl', mode='w') as writer:
+            print("PLEASE WAIT! WRITING TO FILE!")
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+            return True
+    except PermissionError:
+        easygui.msgbox("You must close workbook before progress can be saved.", "Permission Error", "Continue")
+        return False
+
 def wait_for_response(driver: WebDriver):
     driver.sleep(.5)
     try:
@@ -517,15 +541,6 @@ def wait_for_user_to_login(driver: WebDriver):
     except TimeoutException:
         logging.error("User took too long to enter information or page took too long to load.")
     return
-
-def load_sheet(path: str) -> (str, pd.DataFrame):
-    xl = pd.ExcelFile(path)
-    ws = xl.sheet_names
-    sheet_name = list(filter(lambda x: match('^Check_\d{3,10}', x), ws))
-    # sheet_name = list(filter(lambda x: match('^Sheet1', x), ws))
-    df = xl.parse(sheet_name[0])
-    df1 = verify_sheet(df)
-    return sheet_name[0], df1
 
 def verify_sheet(df: pd.DataFrame) -> pd.DataFrame:
     if 'Disputed' in df:
