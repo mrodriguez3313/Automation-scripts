@@ -12,6 +12,7 @@ from selenium.common.exceptions import NoSuchElementException
 
 import easygui
 import pandas as pd
+import numpy
 import openpyxl
 from re import match
 import time
@@ -29,22 +30,24 @@ import concurrent.futures
     # 12. Switch from Selenium to SeleniumBase
     # 13. Don't overwrite Workbook, so to maintain all other sheets that were already there.
     # 14. Add Comments
-    # 15. Refactor code to support higher usability
+    # 15. Refactor code to support higher usability and different scenarios
+    # 16. Implement multiprocessing (maybe not)
 
 # TODO bugs:
 #   1. check for value in select vendor number first, if its there then fill box, else try to reselect it
 #   1a.     Can fix issue by looking for error text instead of forcing X attempts
 #   2. Some claims get skipped, get drafted, and don't get refiled if there is a website error that doesn't have the word "Error" in it.
-#   3. Implement multiprocessing (maybe not)
 #   6. logging not working properly
 
 def main():
     # Ask User for excel sheet to use
-   
     while True:
         is_error, path = open_file()
+        if is_error == None:
+            return
         if not is_error:
             break
+        
 
     # Open Chrome in undetectable mode and get login page
     driver = Driver(uc=True)
@@ -79,21 +82,6 @@ def main():
                 break
     return 
 
-def load_sheet(path: str) -> (str, pd.DataFrame):
-    while True:
-        try:
-            xl = pd.ExcelFile(path, engine="openpyxl")
-            break
-        except PermissionError:
-            easygui.msgbox("Selected workbook is in use by another program. Please close workbook before trying again.", "Permission Error", "Try Again")
-        
-    ws = xl.sheet_names
-    sheet_name = list(filter(lambda x: match('^Check_\d{3,10}', x), ws))
-    # sheet_name = list(filter(lambda x: match('^Sheet1', x), ws))
-    df = xl.parse(sheet_name[0])
-    df1 = verify_sheet(df)
-    return sheet_name[0], df1
-
 def loop_over_sheet(driver: WebDriver, df: pd.DataFrame, start_index: int):
     # log of operations
     logging.basicConfig(filename='output.txt', level=logging.DEBUG, format='')
@@ -116,6 +104,9 @@ def loop_over_sheet(driver: WebDriver, df: pd.DataFrame, start_index: int):
                     if is_err:
                         get_create_dispute_page(driver)
                         click_create_tab(driver)
+                        continue
+                    elif skip == None and is_err == None:
+                        df.at[index, 'Disputed'] = "N"
                         continue
                     df.at[index, 'Disputed'] = 'Y'
                     break
@@ -140,6 +131,7 @@ def dispute_process(driver: WebDriver, invoice: str, skip: bool) -> (bool, bool)
     if is_err:
         # error found
         return False, is_err
+
     disputes_to_file = get_number_of_claims_to_file(driver)
 
     # Loops over every subclaim found in an invoice number
@@ -164,7 +156,7 @@ def dispute_process(driver: WebDriver, invoice: str, skip: bool) -> (bool, bool)
         elif is_draft(driver):
             is_err = file_draft(driver)
             if is_err:
-                # error foudn
+                # error found
                 return False, is_err
             click_create_tab(driver)
             skip = False
@@ -208,8 +200,8 @@ def is_disputable(driver: WebDriver) -> bool:
     try:
         click_dispute_all(driver)
         return True
-    except TimeoutException:
-        logging.warning("TimeoutException: DisputeAll button not found")
+    except NoSuchElementException:
+        logging.info("DisputeAll button not found")
     except Exception as error:
         logging.error("Error in is_disputable:", error)
     return False
@@ -343,9 +335,9 @@ def press_enter(driver: WebDriver):
 
 def get_number_of_claims_to_file(driver: WebDriver) -> int:
     try:
-       return len( WebDriverWait(driver, 30).until(EC.presence_of_all_elements_located((By.LINK_TEXT, "Create Dispute"))))
-    except TimeoutException:
-        logging.debug("Page took too long to load")
+       return len( driver.find_elements(By.LINK_TEXT, "Create Dispute") )
+    except NoSuchElementException:
+        logging.debug("Unable to find 'Create Dispute' links")
     except Exception as error:
         logging.error("Error in get_number_of_claims: ", error)
 
@@ -373,7 +365,7 @@ def click_create_dispute(driver: WebDriver, dispute: int):
     return
 
 def click_dispute_all(driver: WebDriver):
-    dispute_button = WebDriverWait(driver, 3).until(EC.presence_of_element_located((By.XPATH, '//button[contains(@class, "MuiButtonBase-root MuiButton-root MuiButton-contained") and contains(., "DISPUTE ALL")]')))
+    dispute_button = driver.find_element(By.XPATH, '//button[contains(@class, "MuiButtonBase-root MuiButton-root MuiButton-contained") and contains(., "DISPUTE ALL")]')
     dispute_button.click()
     return
 
@@ -473,7 +465,7 @@ def open_file() -> (bool, str):
     try:
         path = easygui.fileopenbox("What Excel sheet would you like to use?")
         if path == None:
-            return True, ""
+            return None, None
         if path.lower().endswith('.xlsx'):
             return False, path
         else:
@@ -482,6 +474,22 @@ def open_file() -> (bool, str):
     except Exception as error:
         logging.error("Error in open_file", error)
         return True, ""
+    
+def load_sheet(path: str) -> (str, pd.DataFrame):
+    while True:
+        try:
+            xl = pd.ExcelFile(path, engine="openpyxl")
+            break
+        except PermissionError:
+            easygui.msgbox("Selected workbook is in use by another program. Please close workbook before trying again.", "Permission Error", "Try Again")
+        
+    ws = xl.sheet_names
+    sheet_name = list(filter(lambda x: match('^Check_\d{3,10}', x), ws))
+    # sheet_name = list(filter(lambda x: match('^Sheet1', x), ws))
+    df = xl.parse(sheet_name[0])
+    
+    df1 = verify_sheet(df)
+    return sheet_name[0], df1
 
 def write_to_file(path: str, sheet_name: str, df: pd.DataFrame) -> bool:
     try:
@@ -504,11 +512,12 @@ def check_error(driver: WebDriver, origin: str) -> bool:
 # Happens on any request, to fix: Must restart from beginning
     
 # Errors that will break code:
-# "Service is down, please try after sometime" happens after pressing enter and before checking for the create_dispute links
-# refresh/restart and then try to re-file
-# "Something went wrong!"
+# "Service is down, please try after sometime"; happens after click_enter and before click_create_dispute links
+    # refresh/restart and then try to re-file
+# "Something went wrong!"; can happen at anytime; script will take a really long time to recover or just freeze
     # Needs to hit "ok" button
-# "No records found for the search criteria"
+# "No records found for the search criteria"; Takes a really long time to recover; happens after click_enter and before click_create_dispute
+# "Authentication Error"; Forces manual intervention to log out and rerun the script
     wait_for_response(driver)
     try:
         WebDriverWait(driver, .5).until(EC.presence_of_element_located((By.XPATH, '//h6[contains(@class, "MuiTypography-root MuiTypography-h6") and contains(.,"Error")]')))
@@ -543,10 +552,17 @@ def wait_for_user_to_login(driver: WebDriver):
     return
 
 def verify_sheet(df: pd.DataFrame) -> pd.DataFrame:
+    df['Invoice Number'] = df['Invoice Number'].astype('Int64')
+    
+    df['Invoice Date'] = pd.to_datetime(df['Invoice Date'])
+    df['Invoice Date'] = df['Invoice Date'].dt.strftime('%m/%d/%Y')
+    
+    df['Date Paid'] = pd.to_datetime(df['Date Paid'])
+    df['Date Paid'] = df['Date Paid'].dt.strftime('%m/%d/%Y')
     if 'Disputed' in df:
         return df
     else:
-        new_df = df.assign(Disputed = None)
+        new_df = df.assign(Disputed = None).astype('string')
         return new_df
     
 def get_create_dispute_page(driver: WebDriver):
