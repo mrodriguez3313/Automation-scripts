@@ -12,7 +12,7 @@ from selenium.common.exceptions import NoSuchElementException
 
 import easygui
 import pandas as pd
-import numpy
+import numpy as np
 import openpyxl
 from re import match
 import time
@@ -57,7 +57,6 @@ def main():
     with concurrent.futures.ThreadPoolExecutor() as executor:
         future = executor.submit(load_sheet, path)
         sheet_name, df = future.result()
-        print(path)
 
         future2 = executor.submit(catch_up, df)
         index_value = future2.result()
@@ -305,7 +304,7 @@ def select_vendor_number(driver: WebDriver):
 def enter_invoice_number(driver: WebDriver, invoice: str):
     print("enter invoice: ", invoice)
 
-# search for input box with a class MuiInputBase-input MuiInput-input MuiAutocomplete-input MuiAutocomplete-inputFocused MuiInputBase-inputAdornedEnd MuiInputBase-inputMarginDense MuiInput-inputMarginDense
+    # search for input box with a class MuiInputBase-input MuiInput-input MuiAutocomplete-input MuiAutocomplete-inputFocused MuiInputBase-inputAdornedEnd MuiInputBase-inputMarginDense MuiInput-inputMarginDense
     # if its value is equal to 736533, then continue with entering invoice, else re-enter vendor number either by selecting or by manually inserting text
     invoice_box = ActionChains(driver)
     box = driver.find_element(By.XPATH, '//input[@id="outlined-error-helper-text"]')
@@ -344,7 +343,7 @@ def get_number_of_claims_to_file(driver: WebDriver) -> int:
 def fill_description(driver: WebDriver):
     description_box = ActionChains(driver)
     box = driver.find_element(By.XPATH, '//textarea[@id="multiline"]')
-    description_box.send_keys_to_element(box, "Invalid Deduction")
+    description_box.send_keys_to_element(box, "Invalid Reclamation")
     description_box.move_to_element(driver.find_element(By.XPATH, '//button[@class="MuiButtonBase-root MuiButton-root MuiButton-text"]/following-sibling::button'))
     description_box.click()
     description_box.perform()
@@ -487,7 +486,6 @@ def load_sheet(path: str) -> (str, pd.DataFrame):
     sheet_name = list(filter(lambda x: match('^Check_\d{3,10}', x), ws))
     # sheet_name = list(filter(lambda x: match('^Sheet1', x), ws))
     df = xl.parse(sheet_name[0])
-    
     df1 = verify_sheet(df)
     return sheet_name[0], df1
 
@@ -552,18 +550,25 @@ def wait_for_user_to_login(driver: WebDriver):
     return
 
 def verify_sheet(df: pd.DataFrame) -> pd.DataFrame:
-    df['Invoice Number'] = df['Invoice Number'].astype('Int64')
+    # change na values to 0 or '' depending on colum type
+    new_df = pd.DataFrame()
+    for i, col in enumerate(df):
+        if col == "Amount Paid($)" or col == "Invoice Amount($)":
+            new_df.insert(i, col, df[col].fillna(0))
+            new_df[col] = new_df[col].astype(np.float64)
+        elif col == "Invoice Date" or col == "Date Paid":
+            df[col] = pd.to_datetime(df[col])
+            df[col] = df[col].dt.strftime('%m/%d/%Y')
+            new_df.insert(i, col, df[col])
+        else:
+            new_df.insert(i, col, df[col].fillna(''))
+            new_df[col] = new_df[col].astype('string')
     
-    df['Invoice Date'] = pd.to_datetime(df['Invoice Date'])
-    df['Invoice Date'] = df['Invoice Date'].dt.strftime('%m/%d/%Y')
-    
-    df['Date Paid'] = pd.to_datetime(df['Date Paid'])
-    df['Date Paid'] = df['Date Paid'].dt.strftime('%m/%d/%Y')
     if 'Disputed' in df:
-        return df
+        new_df['Disputed'] = df['Disputed'].astype('string')
     else:
-        new_df = df.assign(Disputed = None).astype('string')
-        return new_df
+        new_df.insert(len(df.columns), 'Disputed', '')
+    return new_df
     
 def get_create_dispute_page(driver: WebDriver):
     driver.get("https://retaillink2.wal-mart.com/apdp/CreateDisputes")
