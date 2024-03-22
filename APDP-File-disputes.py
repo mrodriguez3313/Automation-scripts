@@ -27,7 +27,6 @@ import concurrent.futures
     # 7. Create pivot table with the new info and include before and after column.
     # 8. make it into an exe
     # 10. write a testing framework that measures performance (time to file [avg&med]), errors, money saved wrt time, hourly wage dollars/hour,  
-    # 12. Switch from Selenium to SeleniumBase
     # 13. Don't overwrite Workbook, so to maintain all other sheets that were already there.
     # 14. Add Comments
     # 15. Refactor code to support higher usability and different scenarios
@@ -562,12 +561,11 @@ def verify_sheet(df: pd.DataFrame) -> pd.DataFrame:
             new_df.insert(i, col, df[col])
         else:
             new_df.insert(i, col, df[col].fillna(''))
-            new_df[col] = new_df[col].astype('string')
     
     if 'Disputed' in df:
-        new_df['Disputed'] = df['Disputed'].astype('string')
+        new_df['Disputed'] = df['Disputed']
     else:
-        new_df.insert(len(df.columns), 'Disputed', '')
+        new_df.insert(len(df.columns), 'Disputed', None)
     return new_df
     
 def get_create_dispute_page(driver: WebDriver):
